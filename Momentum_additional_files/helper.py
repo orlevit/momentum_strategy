@@ -85,7 +85,7 @@ def get_relative(df):
         block = df.iloc[i:i + FORMATION_PERIOD_MONTHS + 1] # Add row to get the date index
         block_12 = block[:-1]
         date_index = block.index[-1]
-        diff = (block_12[STOCK_TIME].iloc[-1] + block_12['Dividends'].sum(axis=0)) / block_12[STOCK_TIME].iloc[0]
+        diff = (block_12[STOCK_TIME].iloc[-1] + block_12['Dividends'].sum(axis=0) - block_12[STOCK_TIME].iloc[0]) / block_12[STOCK_TIME].iloc[0]
         row_df = pd.DataFrame(diff).T
         row_df.index = [date_index]
         relative_df = pd.concat([relative_df, row_df])
@@ -161,7 +161,7 @@ def momentum_strategy(price_data_df, relative_df):
                                   'l_stocks': losers_stocks,
                                   'balance_losers':balance_losers,
                                   'ini_stock_val': 2 * winners_stocks_value}
-    
+
         if HOLDING_PERIOD_MONTHS < ii:    
             prev_loc = ii - HOLDING_PERIOD_MONTHS
             winners_stocks = open_positions[prev_loc]['w_stocks']
