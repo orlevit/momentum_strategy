@@ -4,7 +4,7 @@ import pandas as pd
 import yfinance as yf
 import requests
 import numpy as np
-
+from bs4 import BeautifulSoup
 from config import STOCK_TIME, FORMATION_PERIOD_MONTHS, HOLDING_PERIOD_MONTHS, TOP_DECILE, DATA_POS_LOC
 
 

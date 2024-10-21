@@ -9,7 +9,7 @@ import numpy as np
 from bs4 import BeautifulSoup
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
-
+from bs4 import BeautifulSoup
 from config import STOCK_TIME, FORMATION_PERIOD_MONTHS, HOLDING_PERIOD_MONTHS, TOP_DECILE
 
 def collecting_data(start_date, end_date, file_price_loc, file_div_loc):

@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from dateutil.relativedelta import relativedelta
 from sklearn.metrics import recall_score, precision_score, f1_score
-
+from bs4 import BeautifulSoup
 from config import STOCK_TIME, FORMATION_PERIOD_MONTHS, HOLDING_PERIOD_MONTHS, TOP_DECILE, DATA_POS_LOC, IMG_DIR_LOC,GROUP_LABELS, GROUP_LABELS_TO_STR
 
 
@@ -318,3 +318,46 @@ def print_feature_importance(df, importances, name):
     save_path = os.path.join(IMG_DIR_LOC, f'{name}_model_feature_importance.png')
     plt.savefig(save_path, format='png', dpi=300)
     plt.show()
+
+def calc_profolios_dates(begin_date, end_date, formation_period, holding_period):
+    b_date_obj = datetime.strptime(begin_date, "%Y-%m-%d %H:%M:%S%z")
+    e_date_obj = datetime.strptime(end_date,  "%Y-%m-%d %H:%M:%S%z")
+
+    b_new_date = b_date_obj + relativedelta(months=formation_period - 1)
+    e_new_date = e_date_obj - relativedelta(months=holding_period)
+    
+    profolios_begin_time = b_new_date.strftime("%Y-%m-%d")
+    profolios_end_time = e_new_date.strftime("%Y-%m-%d")
+    
+    return profolios_begin_time, profolios_end_time
+
+
+def calculate_metrics(strategy_returns, sp500_returns, risk_free_rate):
+    # Annualized Return (Assume monthly returns are used)
+    annualized_return = np.prod(1 + strategy_returns) ** (12 / len(strategy_returns)) - 1
+    
+    # Volatility (Annualized)
+    volatility = strategy_returns.std() * np.sqrt(12)  # 12 months in a year
+    
+    # Sharpe Ratio 
+    sharpe_ratio = (annualized_return - risk_free_rate.mean()) / volatility
+    
+    # Max Drawdown
+    cumulative_returns = (1 + strategy_returns).cumprod()
+    max_drawdown = (cumulative_returns / cumulative_returns.cummax() - 1).min()
+    
+    # Value at Risk (VaR) at 1% and 5%
+    VaR_1 = np.percentile(strategy_returns, 1)
+    VaR_5 = np.percentile(strategy_returns, 5)
+    
+    # Alpha against S&P 500 (CAPM)
+    alpha = ((1 + annualized_return) / (1 + sp500_returns.mean()) - 1) * 12
+
+    return {
+        'Annualized Return': annualized_return,
+        'Volatility': volatility,
+        'Sharpe Ratio': sharpe_ratio,
+        'Max Drawdown': max_drawdown,
+        'VaR 1%': VaR_1,
+        'VaR 5%': VaR_5,
+        'Alpha': alpha}
