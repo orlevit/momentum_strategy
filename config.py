@@ -21,6 +21,7 @@ HOLDING_PERIOD_MONTHS = 3
 FORMATION_PERIOD_MONTHS = 12
 TOP_DECILE = 10
 GROUP_LABELS = {'w_stocks_higher':0, 'w_stocks_lower':1, 'l_stocks_higher':2, 'l_stocks_lower':3}
+GROUP_LABELS_TO_STR = {v: k for k, v in GROUP_LABELS.items()}
 
 # Model hyperparameters
 RANDOM_STATE = 42

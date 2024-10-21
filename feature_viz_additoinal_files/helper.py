@@ -234,7 +234,7 @@ def extract_period_name(metric_name_raw, winner_losers):
     if period_name_period == '1':
         period_name =  'First quarter'
     if period_name_period == '2':
-        period_name =  'period_name_raw quarter'
+        period_name =  'Second quarter'
     if period_name_period == '3':
         period_name =  'Third quarter'
     if period_name_period == '4':

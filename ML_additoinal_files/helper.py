@@ -4,8 +4,11 @@ import pandas as pd
 import yfinance as yf
 import requests
 import numpy as np
+import matplotlib.pyplot as plt
+from dateutil.relativedelta import relativedelta
+from sklearn.metrics import recall_score, precision_score, f1_score
 
-from config import STOCK_TIME, FORMATION_PERIOD_MONTHS, HOLDING_PERIOD_MONTHS, TOP_DECILE, DATA_POS_LOC
+from config import STOCK_TIME, FORMATION_PERIOD_MONTHS, HOLDING_PERIOD_MONTHS, TOP_DECILE, DATA_POS_LOC, IMG_DIR_LOC,GROUP_LABELS, GROUP_LABELS_TO_STR
 
 
 def get_relative(df):
@@ -226,7 +229,7 @@ def get_risk_free_rate(start_date, end_date):
         
     return annual_risk_free_rate
 
-def plot_label_frequency(df, group_labels_to_str, split_name):
+def plot_label_frequency(df, group_labels_to_str, name, split_name):
     # Map the label numbers to their corresponding names
     df['label_name'] = df['label'].map(group_labels_to_str)
     
@@ -251,4 +254,67 @@ def plot_label_frequency(df, group_labels_to_str, split_name):
     plt.ylabel('Frequency')
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
+    save_path = os.path.join(IMG_DIR_LOC, f'{name}_{split_name}.png')
+    plt.savefig(save_path, format='png', dpi=300)
+    plt.show()
+
+
+def populate_with_model(model, price_df, date, s_stocks_list, rfr, momentum_group):
+    stocks_list = []
+    for stock in s_stocks_list:
+        stock_features = calc_variability_per_stocks(model, price_df, date, stock, rfr, GROUP_LABELS)
+        pred_group = int(best_estimator.predict(stock_features)[0])
+
+        if momentum_group == pred_group:
+            stocks_list.append(losers_stock)
+
+    return stocks_list
+
+
+def split_train_test(df, train_range, name):
+    
+    train_df = df.iloc[:train_range]
+    test_df = df.iloc[train_range:]
+    print(f'{name} Data')
+    print(f'Train length: {train_df.shape}, Test length: {test_df.shape}')
+    
+    plot_label_frequency(train_df, GROUP_LABELS_TO_STR, name, 'Train')
+    plot_label_frequency(test_df, GROUP_LABELS_TO_STR, name, 'Test')
+
+    return train_df, test_df
+
+
+def measures_results(model, test_df):
+    exclude_columns = ['date', 'label_name','stock', 'label']
+    clean_test_df = test_df.loc[:, ~test_df.columns.isin(exclude_columns)]
+    
+    test_df['prediction'] = model.predict(clean_test_df)
+    test_df['label'] = test_df['label'].astype(int)
+    test_df['prediction'] = test_df['prediction'].astype(int)  
+    
+    r_score = recall_score(test_df['prediction'], test_df['label'] , average = 'weighted')
+    p_score = precision_score(test_df['prediction'], test_df['label'] , average = 'weighted')
+    f1 = f1_score(test_df['prediction'].values, test_df['label'].values, average='weighted')
+
+    print(f'Precision: {p_score}\nRecall: {f1}\nf1_score: {f1}\n')
+
+def print_feature_importance(df, importances, name):
+    
+    exclude_columns = ['date', 'label_name','stock','label']
+    clean_df = df.loc[:, ~df.columns.isin(exclude_columns)]
+    feature_importance_df = pd.DataFrame({
+            'Feature': clean_df.columns,
+            'Importance': importances
+        })
+        
+    feature_importance_df = feature_importance_df.sort_values(by='Importance', ascending=False)
+    print(name)
+    plt.figure(figsize=(10, 6))
+    plt.barh(feature_importance_df['Feature'], feature_importance_df['Importance'])
+    plt.xlabel('Importance')
+    plt.ylabel('Feature')
+    plt.title('Feature Importances')
+    plt.gca().invert_yaxis() 
+    save_path = os.path.join(IMG_DIR_LOC, f'{name}_model_feature_importance.png')
+    plt.savefig(save_path, format='png', dpi=300)
     plt.show()
