@@ -6,7 +6,7 @@ This project implements and enhances the momentum strategy outlined in the semin
 ## Table of Contents
 - [Installation](#installation)
 - [Assumptions](#assumptions)
-- [Enhanced Momentum Strategy](#enhanced momentum strategy)
+- [Enhanced Momentum Strategy](#enhanced-momentum-strategy)
 - [Conclusions](#conclusions)
 
 
@@ -20,10 +20,10 @@ git clone https://github.com/orlevit/momentum_strategy.git
 ```
 python install -r requirmentx.txt
 ```
-4. Recreate the results:
-**Momentum_Strategy.ipynb** - Original momentum strategy.
-**feature_visualization.ipynb** - Model feature visualization.
-**ML.ipynb** - Enhanced momentum strategy.
+4. Recreate the results: 
+ - **Momentum_Strategy.ipynb** - Original momentum strategy.
+ - **feature_visualization.ipynb** - Model feature visualization.
+ - **ML.ipynb** - Enhanced momentum strategy.
 
 ## Assumptions
 
