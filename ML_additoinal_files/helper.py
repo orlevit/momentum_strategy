@@ -1,11 +1,12 @@
 import os
-import pickle
 import pandas as pd
 import yfinance as yf
 import requests
 import numpy as np
-import matplotlib.pyplot as plt
+from datetime import datetime
 from dateutil.relativedelta import relativedelta
+from scipy import stats
+import matplotlib.pyplot as plt
 from sklearn.metrics import recall_score, precision_score, f1_score
 from bs4 import BeautifulSoup
 from config import STOCK_TIME, FORMATION_PERIOD_MONTHS, HOLDING_PERIOD_MONTHS, TOP_DECILE, DATA_POS_LOC, IMG_DIR_LOC,GROUP_LABELS, GROUP_LABELS_TO_STR
@@ -143,6 +144,18 @@ def momentum_strategy_stat(price_data_df, relative_df):
             losers_stocks = open_positions[prev_loc]['l_stocks']
             balance_losers = open_positions[prev_loc]['balance_losers']
 
+            winners_stocks_value = price_data_df.loc[date,STOCK_TIME][winners_stocks].sum()
+            losers_stocks_value = price_data_df.loc[date, STOCK_TIME][losers_stocks].sum()
+    
+            gained_valued = winners_stocks_value - (losers_stocks_value * balance_losers)
+            base_gain = open_positions[prev_loc]['ini_stock_val']
+            
+            open_positions[prev_loc]['rel_gained'] =  (gained_valued +  base_gain) / base_gain
+            open_positions[prev_loc]['gained_valued'] = gained_valued
+    
+            # print(prev_loc,base_gain,gained_valued,(gained_valued +  base_gain) / base_gain)
+            total_gained_valued += gained_valued
+            
             for stock in winners_stocks:
                 curr_price = price_data_df.loc[prev_date, STOCK_TIME][stock]
                 prev_price = price_data_df.loc[date, STOCK_TIME][stock]
@@ -161,7 +174,7 @@ def momentum_strategy_stat(price_data_df, relative_df):
                 else:
                     open_positions[prev_loc]['l_stocks_lower']['code'].append(stock)                    
                     
-    return open_positions
+    return open_positions, total_gained_valued
 
 
 def calc_variability_per_stocks_per_type(run_ind, date, features_dict, pos, block, stocks_type, group_labels, add_info_name, risk_free_rate):
@@ -361,3 +374,153 @@ def calculate_metrics(strategy_returns, sp500_returns, risk_free_rate):
         'VaR 1%': VaR_1,
         'VaR 5%': VaR_5,
         'Alpha': alpha}
+
+
+def calc_one_sided_test(open_positions):
+    portfolios_gain = []
+    for k, v in open_positions.items():
+        portfolios_gain.append(v['gained_valued'])
+    
+    null_mean = 0 
+    t_statistic, p_value = stats.ttest_1samp(portfolios_gain, 0)
+    p_value_one_tailed = p_value / 2
+    
+    return np.mean(portfolios_gain), p_value_one_tailed
+
+def measure_model_results(model, test_df):
+    exclude_columns = ['date', 'label_name','stock', 'label']
+    clean_test_df = test_df.loc[:, ~test_df.columns.isin(exclude_columns)]
+    
+    test_df['prediction'] = model.predict(clean_test_df)
+    test_df['label'] = test_df['label'].astype(int)
+    test_df['prediction'] = test_df['prediction'].astype(int)  
+    
+    r_score = recall_score(test_df['prediction'], test_df['label'] , average = 'weighted')
+    p_score = precision_score(test_df['prediction'], test_df['label'] , average = 'weighted')
+    f1 = f1_score(test_df['prediction'].values, test_df['label'].values, average='weighted')
+
+    print(f'Precision: {p_score}\nRecall: {f1}\nf1_score: {f1}\n')
+
+
+def single_stock_calc(date, features_dict, block, stock, group_labels, add_info_name, risk_free_rate):
+    
+    annual_return = ((block['Open'][stock].iloc[-1] + block['Dividends'][stock].sum(axis=0) - block['Open'][stock].iloc[0]) / block['Open'][stock].iloc[0]) - 1
+    volatility = np.std(block['Open'][stock])
+    sharpe_ratio = float((annual_return - risk_free_rate) / volatility)
+    prices_flunc_p = float(np.std(block['Close'][stock] - block['Open'][stock]) / np.mean(block['Close'][stock] - block['Open'][stock]))
+    volatility_p = float(np.std(block['Open'][stock]) / np.mean(block['Open'][stock]))
+    volume_p = float(np.std(block['Volume'][stock]) / np.mean(block['Volume'][stock]))
+
+    if len(features_dict):
+        features_dict[f'sharpe_ratio_{add_info_name}'] = sharpe_ratio
+        features_dict[f'open_p_{add_info_name}'] =volatility_p
+        features_dict[f'prices_flunc_p_{add_info_name}'] = prices_flunc_p
+        features_dict[f'volume_p_{add_info_name}'] = volume_p
+        
+    else:
+        features_dict = {f'sharpe_ratio_{add_info_name}':sharpe_ratio, \
+                         f'open_p_{add_info_name}': volatility_p,\
+                         f'prices_flunc_p_{add_info_name}': prices_flunc_p,\
+                         f'volume_p_{add_info_name}': volume_p}
+    
+    return features_dict
+
+
+def calc_features_per_stock(model, price_data_df, date, stock_name, risk_free_rate, group_labels):
+    features_dict = {}
+
+    b_date = date - relativedelta(months=FORMATION_PERIOD_MONTHS)
+    e_date = date - relativedelta(months=1)
+    block12 = price_data_df.loc[b_date: e_date]
+    features_dict = single_stock_calc(date, features_dict, block12, stock_name, group_labels, '12',risk_free_rate)
+    
+    quarter_start = b_date
+    rel_month_add = 0
+    
+    for quarter_i in range(4):
+        quarter_b_date = b_date + relativedelta(months=rel_month_add)
+        quarter_e_date = quarter_b_date + relativedelta(months=HOLDING_PERIOD_MONTHS - 1)
+        block4 = block12.loc[quarter_b_date: quarter_e_date]
+
+        features_dict = single_stock_calc(date, features_dict, block4, stock_name, group_labels, str(quarter_i + 1), risk_free_rate)
+        rel_month_add += HOLDING_PERIOD_MONTHS 
+
+    return pd.DataFrame({1:features_dict}).T
+
+def populate_with_model(model, price_df, date, s_stocks_list, rfr, momentum_group):
+    stocks_list = []
+    for stock in s_stocks_list:
+        stock_features = calc_features_per_stock(model, price_df, date, stock, rfr, GROUP_LABELS)
+
+        stock_features.replace([np.inf, -np.inf], [np.finfo(np.float32).max, np.finfo(np.float32).min], inplace=True)
+        pred_group = int(model.predict(stock_features)[0])
+
+        if momentum_group == pred_group:
+            stocks_list.append(stock)
+
+    return stocks_list
+
+def updated_momentum_strategy(price_data_df, relative_df, w_model, l_model, rfr):
+    price_data_df.index = pd.to_datetime(price_data_df.index)
+
+    open_positions = {}
+    total_gained_valued = 0
+    
+    
+    # Loop over each month in the data
+    for ii, date in enumerate(relative_df.index, 1):
+        if ii <= len(relative_df) - HOLDING_PERIOD_MONTHS: 
+            # Get the returns for the past formation period
+            past_returns = relative_df.loc[date]
+            
+            # Rank stocks based on past returns
+            ranked_stocks = past_returns.rank(ascending=True)
+        
+            # Define deciles
+            losers_stocks_suggest = ranked_stocks[ranked_stocks <= ranked_stocks.quantile(1/TOP_DECILE)].index.values.tolist()
+            winners_stocks_suggest = ranked_stocks[ranked_stocks >= ranked_stocks.quantile(1 - (1/TOP_DECILE))].index.values.tolist()
+
+
+            losers_stocks = populate_with_model(l_model, price_data_df, pd.to_datetime(date), losers_stocks_suggest, rfr, GROUP_LABELS['l_stocks_lower'])
+            winners_stocks = populate_with_model(w_model, price_data_df, pd.to_datetime(date), winners_stocks_suggest, rfr, GROUP_LABELS['w_stocks_higher'])
+
+            if len(winners_stocks):
+                winners_stocks_value = float(pd.DataFrame(price_data_df.loc[date, STOCK_TIME]).T[winners_stocks].values[0].sum())
+            else:
+                winners_stocks_value = 0
+            
+            if len(losers_stocks):                
+                losers_stocks_value = float(pd.DataFrame(price_data_df.loc[date, STOCK_TIME]).T[losers_stocks].values[0].sum())
+            else:
+                losers_stocks_value = 0    
+                winners_stocks_value = 0
+
+            if losers_stocks_value:
+                balance_losers =  winners_stocks_value / losers_stocks_value
+            else:
+                balance_losers = 0
+                
+            open_positions[ii] = {'date':date,
+                                  'w_stocks': winners_stocks, 
+                                  'l_stocks': losers_stocks,
+                                  'balance_losers':balance_losers,
+                                  'ini_stock_val': 2 * winners_stocks_value}
+
+        if HOLDING_PERIOD_MONTHS < ii:    
+            prev_loc = ii - HOLDING_PERIOD_MONTHS
+            winners_stocks = open_positions[prev_loc]['w_stocks']
+            losers_stocks = open_positions[prev_loc]['l_stocks']
+            balance_losers = open_positions[prev_loc]['balance_losers']
+    
+            winners_stocks_value = price_data_df.loc[date,STOCK_TIME][winners_stocks].sum()
+            losers_stocks_value = price_data_df.loc[date, STOCK_TIME][losers_stocks].sum()
+    
+            gained_valued = winners_stocks_value - (losers_stocks_value * balance_losers)
+            base_gain = open_positions[prev_loc]['ini_stock_val']
+            
+            open_positions[prev_loc]['rel_gained'] =  (gained_valued +  base_gain) / base_gain
+            open_positions[prev_loc]['gained_valued'] = gained_valued
+    
+            total_gained_valued += gained_valued
+    
+    return open_positions, total_gained_valued
