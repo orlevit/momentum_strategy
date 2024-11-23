@@ -15,7 +15,7 @@ DATA_ADJ_CLOSE_LOC = os.path.join(DATA_DIR_LOC, 'data_close_adj.csv')
 IMG_DIR_LOC = os.path.join(os.getcwd(), 'images')
 
 # Momentum hyperparameters
-START_DATE = '2004-01-01'
+START_DATE = '2003-12-01'
 END_DATE = '2024-10-01'
 STOCK_TIME = 'Adj Close'
 HOLDING_PERIOD_MONTHS = 3

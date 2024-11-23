@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from bs4 import BeautifulSoup
 from config import STOCK_TIME, FORMATION_PERIOD_MONTHS, HOLDING_PERIOD_MONTHS, TOP_DECILE
 
-def collecting_data(start_date, end_date, file_price_loc, file_div_loc):
+def collecting_data(start_date, end_date, file_price_loc):
     def fetch_sp500_companies():
         # Fetch the list of S&P 500 companies from Wikipedia
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
@@ -46,50 +46,70 @@ def collecting_data(start_date, end_date, file_price_loc, file_div_loc):
     
         return active_companies
 
-    if os.path.isfile(file_price_loc) and os.path.isfile(file_div_loc):
+    if os.path.isfile(file_price_loc):
         df_price = pd.read_csv(file_price_loc)
-        df_div = pd.read_csv(file_div_loc)
 
-        date_index = df_price['Date']
-        df_price.drop(['Date'],  axis=1, inplace=True)
-        df_div.drop(['Date'],  axis=1, inplace=True)
-
-        df_price.columns = pd.MultiIndex.from_product([[STOCK_TIME], df_price.columns])
-        df_div.columns = pd.MultiIndex.from_product([['Dividends'], df_div.columns])
-        
-        # Concatenate along columns (axis=1)
-        result_df = pd.concat([df_price, df_div], axis=1)
-        
-        result_df['Date'] = date_index
-        result_df.set_index('Date', inplace=True)
-
-        return result_df
+        return df_price
         
     else:
         # Get the list of S&P 500 companies for the year 2004
         companies_2004 = get_sp500_companies_active_in_year(start_date, end_date)
-        price_data = yf.download(companies_2004, start=start_date, end=end_date, interval='1mo', actions =True)[[STOCK_TIME,'Dividends']]
+        price_data = yf.download(companies_2004, start=start_date, end=end_date, interval='1mo', actions =True)[['Adj Close']]
         num_columns_with_nan = price_data.isnull().any().sum()
         print(f'The number of columns that have nan values: {num_columns_with_nan}, and are been dropped.')
         price_data = price_data.dropna(axis=1)
         price_data[STOCK_TIME].to_csv(file_price_loc)
-        price_data['Dividends'].to_csv(file_div_loc)
 
         return price_data
 
 
-def get_relative(df):
-    relative_df = pd.DataFrame(columns=df[STOCK_TIME].columns.values)
+# The last 3 months not removed
+def get_relative_12(df):
+    relative_df = pd.DataFrame(columns=df.columns.values)
     
-    for i in range(len(df) - FORMATION_PERIOD_MONTHS ):
+    for i in range(1, len(df) - FORMATION_PERIOD_MONTHS):
         block = df.iloc[i:i + FORMATION_PERIOD_MONTHS + 1] # Add row to get the date index
         block_12 = block[:-1]
-        date_index = block.index[-1]
-        diff = (block_12[STOCK_TIME].iloc[-1] + block_12['Dividends'].sum(axis=0) - block_12[STOCK_TIME].iloc[0]) / block_12[STOCK_TIME].iloc[0]
+        block_12 = block_12.loc[:, ~block.columns.isin(['Date'])] # First part of the block (12 months)        
+        date_index = block.iloc[-1]['Date']
+        diff = block_12.iloc[-1] - block_12.iloc[0]
         row_df = pd.DataFrame(diff).T
+        row_df['Date'] = date_index        
         row_df.index = [date_index]
         relative_df = pd.concat([relative_df, row_df])
+        
+    relative_df.drop(['Date'], axis=1,inplace=True)        
     return relative_df
+    
+# The both first 12 and last 3 months were removed
+def get_relative_3(df):
+    relative_df = pd.DataFrame(columns=df.columns.values)
+    for i in range(1, len(df) - FORMATION_PERIOD_MONTHS - HOLDING_PERIOD_MONTHS):
+        block = df.iloc[i:i + FORMATION_PERIOD_MONTHS + HOLDING_PERIOD_MONTHS] # Add row to get the date index
+        block_3 = block[-HOLDING_PERIOD_MONTHS:]
+        block_3 = block_3.loc[:, ~block.columns.isin(['Date'])]  # First part of the block (12 months)
+        date_index = block.iloc[FORMATION_PERIOD_MONTHS]['Date']
+        diff = block_3.iloc[-1] - block_3.iloc[0]
+        row_df = pd.DataFrame(diff).T
+        row_df['Date'] = date_index
+        row_df.index = [date_index]
+        relative_df = pd.concat([relative_df, row_df])
+
+    relative_df.drop(['Date'], axis=1,inplace=True)            
+    return relative_df
+
+def get_lagged(df):
+    lag_df = df.loc[:, ~df.columns.isin(['Date'])] # First part of the block (12 months)        
+    lag_df = lag_df.diff(1,axis=0)
+    lag_df['Date'] = df['Date']
+    return lag_df.iloc[1:]
+
+def get_relative(df):
+    rel3 = get_relative_3(df)
+    rel12 = get_relative_3(df)
+    rel_lag = get_lagged(df)
+
+    return rel3, rel12, rel_lag
 
 
 def calc_one_sided_test(open_positions):
@@ -105,12 +125,28 @@ def calc_one_sided_test(open_positions):
 
 # Annual risk_free rate using the 10 Year Treasury Bond Yield
 def get_risk_free_rate(start_date, end_date):
-    treasury_bond_yield = yf.download("^TNX", start=start_date, end=end_date, interval='1d')
 
-    # Calculate annual average yield (Risk-Free Rate)
-    annual_risk_free_rate = treasury_bond_yield[STOCK_TIME].resample('Y').mean()
-        
-    return annual_risk_free_rate
+    def calculate_yearly_diff(group):
+        first_month_value = group.iloc[0][STOCK_TIME]  # First entry in the year
+        last_month_value = group.iloc[-1][STOCK_TIME]  # Last entry in the year
+        return last_month_value - first_month_value
+
+    treasury_bond_yield = yf.download("^TNX", start=start_date, end=end_date, interval='1d')
+    
+    data = treasury_bond_yield[STOCK_TIME]
+    data.index = pd.to_datetime(data.index)
+    
+    # Convert the series to a DataFrame and add a 'Year' column
+    data = data.to_frame()
+    data['Year'] = data.index.year
+    
+    # Group by the 'Year' and apply the calculation
+    yearly_diff = data.groupby('Year').apply(calculate_yearly_diff)
+    
+    # Convert the result to a DataFrame
+    yearly_diff_df = pd.DataFrame(yearly_diff, columns=['Difference'])
+    yearly_diff_df.index.name = 'Year'
+    return yearly_diff_df
 
 def calc_profolios_dates(begin_date, end_date, formation_period, holding_period):
     b_date_obj = datetime.strptime(begin_date, "%Y-%m-%d")
@@ -132,7 +168,6 @@ def calc_end_profolios_date(date):
 
 
 def momentum_strategy(price_data_df, relative_df):
-    
     open_positions = {}
     total_gained_valued = 0
     
@@ -151,11 +186,14 @@ def momentum_strategy(price_data_df, relative_df):
             losers_stocks = ranked_stocks[ranked_stocks <= ranked_stocks.quantile(1/TOP_DECILE)].index.values.tolist()
             winners_stocks = ranked_stocks[ranked_stocks >= ranked_stocks.quantile(1 - (1/TOP_DECILE))].index.values.tolist()
             
-            winners_stocks_value = price_data_df.loc[date, STOCK_TIME][winners_stocks].sum()
-            losers_stocks_value = price_data_df.loc[date, STOCK_TIME][losers_stocks].sum()
+            winners_stocks_value = price_data_df.loc[date][winners_stocks].sum()
+            losers_stocks_value = price_data_df.loc[date][losers_stocks].sum()
+            print(winners_stocks_value,losers_stocks_value)
+            if losers_stocks_value != 0:
+                balance_losers = winners_stocks_value / losers_stocks_value
+            else:
+                balance_losers = 0
     
-            balance_losers =  winners_stocks_value / losers_stocks_value
-                
             open_positions[ii] = {'date':date,
                                   'w_stocks': winners_stocks, 
                                   'l_stocks': losers_stocks,
@@ -168,9 +206,13 @@ def momentum_strategy(price_data_df, relative_df):
             losers_stocks = open_positions[prev_loc]['l_stocks']
             balance_losers = open_positions[prev_loc]['balance_losers']
     
-            winners_stocks_value = price_data_df.loc[date,STOCK_TIME][winners_stocks].sum()
-            losers_stocks_value = price_data_df.loc[date, STOCK_TIME][losers_stocks].sum()
-    
+            if winners_stocks and losers_stocks:
+                winners_stocks_value = price_data_df.loc[date][winners_stocks].sum()
+                losers_stocks_value = price_data_df.loc[date][losers_stocks].sum()
+            else:
+                winners_stocks_value = 0
+                losers_stocks_value = 0
+
             gained_valued = winners_stocks_value - (losers_stocks_value * balance_losers)
             base_gain = open_positions[prev_loc]['ini_stock_val']
             
@@ -211,7 +253,7 @@ def calculate_metrics(strategy_returns, sp500_returns, risk_free_rate):
     volatility = strategy_returns.std() * np.sqrt(12)  # 12 months in a year
     
     # Sharpe Ratio 
-    sharpe_ratio = (annualized_return - risk_free_rate.mean()) / volatility
+    sharpe_ratio = (annualized_return - risk_free_rate['Difference'].mean()) / volatility
     
     # Max Drawdown
     cumulative_returns = (1 + strategy_returns).cumprod()
